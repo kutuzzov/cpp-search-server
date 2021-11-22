@@ -266,10 +266,7 @@ private:
 
 // ==================== для примера =========================
 
-<<<<<<< HEAD
 
-=======
->>>>>>> 3fd4bc14432c2b77d94921876b54eaa923e8c009
 void PrintDocument(const Document& document) {
     cout << "{ "s
          << "document_id = "s << document.id << ", "s
@@ -303,8 +300,4 @@ int main() {
     }
 
     return 0;
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> 3fd4bc14432c2b77d94921876b54eaa923e8c009
