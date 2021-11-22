@@ -46,13 +46,11 @@ vector<string> SplitIntoWords(const string& text) {
     return words;
 }
   
-
 struct Document {
     int id;
     double relevance;
     int rating;
 };
-
 
 enum class DocumentStatus {
     ACTUAL,
@@ -60,7 +58,6 @@ enum class DocumentStatus {
     BANNED,
     REMOVED,
 };
-
 
 class SearchServer {
 public:
@@ -82,25 +79,16 @@ public:
                 status
             });
     }
+    
     // новый метод с двумя параметрами
     vector<Document> FindTopDocuments(const string& raw_query, DocumentStatus status) const {
-        switch (status) {
-            case DocumentStatus::ACTUAL:
-                return FindTopDocuments(raw_query, [](int document_id, DocumentStatus status, int rating) { return status == DocumentStatus::ACTUAL; });
-            case DocumentStatus::IRRELEVANT:
-                return FindTopDocuments(raw_query, [](int document_id, DocumentStatus status, int rating) { return status == DocumentStatus::IRRELEVANT; });
-            case DocumentStatus::BANNED:
-                return FindTopDocuments(raw_query, [](int document_id, DocumentStatus status, int rating) { return status == DocumentStatus::BANNED; });
-            case DocumentStatus::REMOVED:
-                return FindTopDocuments(raw_query, [](int document_id, DocumentStatus status, int rating) { return status == DocumentStatus::REMOVED; });
-        }
-        return FindTopDocuments(raw_query, [](int document_id, DocumentStatus status, int rating) { return status == DocumentStatus::ACTUAL; });
-    }    
+        return FindTopDocuments(raw_query, [&status](int document_id, DocumentStatus status_new, int rating) {return status_new == status;});
+    }
+    
     // старый метод с одним параметром
     vector<Document> FindTopDocuments(const string& raw_query) const {
-        auto matched_documents = FindTopDocuments(raw_query, 
+        return FindTopDocuments(raw_query, 
              [](int document_id, const DocumentStatus& status, int rating) {return status == DocumentStatus::ACTUAL;;});
-        return matched_documents;
     }  
        
     template <typename DocumentPredicate>
@@ -223,7 +211,6 @@ private:
         return query;
     }
     
-    // Existence required
     double ComputeWordInverseDocumentFreq(const string& word) const {
         return log(GetDocumentCount() * 1.0 / word_to_document_freqs_.at(word).size());
     }
@@ -236,11 +223,12 @@ private:
                 continue;
             }
             const double inverse_document_freq = ComputeWordInverseDocumentFreq(word);
-                for (const auto [document_id, term_freq] : word_to_document_freqs_.at(word)) {
-                    if (document_predicate (document_id, documents_.at(document_id).status, documents_.at(document_id).rating)) {
-                        document_to_relevance[document_id] += term_freq * inverse_document_freq;
-                    }
+            for (const auto [document_id, term_freq] : word_to_document_freqs_.at(word)) {
+                DocumentData documents_data = documents_.at(document_id);
+                if (document_predicate(document_id, documents_data.status, documents_data.rating)) {
+                    document_to_relevance[document_id] += term_freq * inverse_document_freq;
                 }
+            }
         }
         
         for (const string& word : query.minus_words) {
@@ -265,7 +253,6 @@ private:
 };
 
 // ==================== для примера =========================
-
 
 void PrintDocument(const Document& document) {
     cout << "{ "s
@@ -300,8 +287,4 @@ int main() {
     }
 
     return 0;
-<<<<<<< HEAD
 }
-=======
-}
->>>>>>> afb1093148162aabec2ab34423dde32e2a874356
