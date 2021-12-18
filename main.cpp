@@ -85,20 +85,16 @@ public:
 
     template <typename StringContainer>
     explicit SearchServer(const StringContainer& stop_words) {
-        for (const auto& word : stop_words) {
-            if (!IsValidWord(word)) {
-                throw invalid_argument("Слово содержит специальный символ"s);
-            }
+        if (all_of(stop_words.begin(), stop_words.end(), IsValidWord)) {
+            stop_words_ = MakeUniqueNonEmptyStrings(stop_words);
+        } else {
+            throw invalid_argument("Слово содержит специальный символ"s);
         }
-        stop_words_ = MakeUniqueNonEmptyStrings(stop_words);
     }
 
     explicit SearchServer(const string& stop_words_text)
         : SearchServer(SplitIntoWords(stop_words_text))
     {
-        if (!IsValidWord(stop_words_text)) {
-            throw invalid_argument("Слово содержит специальный символ"s);
-        }
     }
 
     void AddDocument(int document_id, const string& document, DocumentStatus status, const vector<int>& ratings) {
@@ -127,20 +123,17 @@ public:
     }
 
     template <typename DocumentPredicate>
-    vector<Document> FindTopDocuments(const string& raw_query, DocumentPredicate document_predicate) const {
-        Query query;
-        if (!ParseQuery(raw_query, query)) {
-            exit(1); //Try to emergency exit
-        }
+    vector<Document> FindTopDocuments(const string& raw_query, DocumentPredicate document_predicate) const {            
+        const Query query = ParseQuery(raw_query);
         auto matched_documents = FindAllDocuments(query, document_predicate);
-
-        sort(matched_documents.begin(), matched_documents.end(), [](const Document& lhs, const Document& rhs) {
-            if (abs(lhs.relevance - rhs.relevance) < 1e-6) {
-                return lhs.rating > rhs.rating;
-            } else {
-                return lhs.relevance > rhs.relevance;
-            }
-            });
+        sort(matched_documents.begin(), matched_documents.end(),
+             [](const Document& lhs, const Document& rhs) {
+                if (abs(lhs.relevance - rhs.relevance) < 1e-6) {
+                    return lhs.rating > rhs.rating;
+                } else {
+                    return lhs.relevance > rhs.relevance;
+                }
+             });
         if (matched_documents.size() > MAX_RESULT_DOCUMENT_COUNT) {
             matched_documents.resize(MAX_RESULT_DOCUMENT_COUNT);
         }
@@ -163,20 +156,11 @@ public:
     }
 
     int GetDocumentId(int index) const {
-        if (index >= 0 && index < GetDocumentCount()) {
-            return document_ids_[index];
-        } else {
-            throw out_of_range("Индекс выходит за пределы диапазона"s);
-        }
-        return INVALID_DOCUMENT_ID;
+        throw out_of_range("Индекс выходит за пределы диапазона"s);
     }
 
-
     tuple<vector<string>, DocumentStatus> MatchDocument(const string& raw_query, int document_id) const {
-        Query query;
-        if (!ParseQuery(raw_query, query)) {
-            exit(1);
-        }
+        const Query query = ParseQuery(raw_query);
         vector<string> matched_words;
         for (const string& word : query.plus_words) {
             if (word_to_document_freqs_.count(word) == 0) {
@@ -195,8 +179,9 @@ public:
                 break;
             }
         }
-        return { matched_words, documents_.at(document_id).status };
+        return {matched_words, documents_.at(document_id).status};
     }
+    
 private:
     struct DocumentData {
         int rating;
@@ -253,10 +238,8 @@ private:
         bool is_stop;
     };
 
-    [[nodiscard]] bool ParseQueryWord(string text, QueryWord& result) const {
-        // Empty result by initializing it with default constructed QueryWord
-        result = {};
-
+    QueryWord ParseQueryWord(string text) const {
+        QueryWord result;
         if (text.empty()) {
             throw invalid_argument("Отсутствие минус-слова"s);
         }
@@ -272,9 +255,8 @@ private:
         } else if (!IsValidWord(text)) {
             throw invalid_argument("Слово содержит специальный символ"s);
         }
-
-        result = QueryWord{ text, is_minus, IsStopWord(text) };
-        return true;
+        
+	return { text, is_minus, IsStopWord(text) };
     }
 
     struct Query {
@@ -282,26 +264,20 @@ private:
         set<string> minus_words;
     };
 
-    [[nodiscard]] bool ParseQuery(const string& text, Query& result) const {
-        // Empty result by initializing it with default constructed Query
-        result = {};
-        if (text.empty()) {
-            throw invalid_argument("Невозможно найти документы из пустых слов"s);
-        }
+    Query ParseQuery(const string& text) const {
+        Query result;
         for (const string& word : SplitIntoWords(text)) {
-            QueryWord query_word;
-            if (!ParseQueryWord(word, query_word)) {
-                return false;
-            }
+            QueryWord query_word = ParseQueryWord(word);
             if (!query_word.is_stop) {
                 if (query_word.is_minus) {
                     result.minus_words.insert(query_word.data);
-                } else {
+                }
+                else {
                     result.plus_words.insert(query_word.data);
                 }
             }
         }
-        return true;
+        return result;
     }
 
     // Existence required
