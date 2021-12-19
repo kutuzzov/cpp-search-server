@@ -79,16 +79,12 @@ enum class DocumentStatus {
 
 class SearchServer {
 public:
-    // Defines an invalid document id
-    // You can refer this constant as SearchServer::INVALID_DOCUMENT_ID
-    inline static constexpr int INVALID_DOCUMENT_ID = -1;
-
     template <typename StringContainer>
     explicit SearchServer(const StringContainer& stop_words) {
         if (all_of(stop_words.begin(), stop_words.end(), IsValidWord)) {
-            stop_words_ = MakeUniqueNonEmptyStrings(stop_words);
+        stop_words_ = MakeUniqueNonEmptyStrings(stop_words);
         } else {
-            throw invalid_argument("Слово содержит специальный символ"s);
+        throw invalid_argument("Слово содержит специальный символ"s);
         }
     }
 
@@ -155,8 +151,12 @@ public:
         return documents_.size();
     }
 
-    int GetDocumentId(int index) const {
-        throw out_of_range("Индекс выходит за пределы диапазона"s);
+    int GetDocumentId(int index) const { 
+        if (index >= 0 && index < GetDocumentCount()) { 
+            return document_ids_[index]; 
+        } else { 
+            throw out_of_range("Индекс выходит за пределы диапазона"s); 
+        } 
     }
 
     tuple<vector<string>, DocumentStatus> MatchDocument(const string& raw_query, int document_id) const {
@@ -204,9 +204,8 @@ private:
     }
 
     bool CheckSameId(const int& new_id) {
-        // A valid word must not contain special characters
-        for (const auto& [id_id_documents_, documentdata] : documents_) {
-            if (id_id_documents_ == new_id) return false;
+        if (documents_.count(new_id)) {
+            return false;
         }
         return true;
     }
