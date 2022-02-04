@@ -1,393 +1,946 @@
-#include <algorithm>
-#include <cmath>
-#include <iostream>
-#include <map>
-#include <set>
+#include <cassert>
+#include <cstddef>
+#include <iterator>
 #include <string>
 #include <utility>
-#include <vector>
+#include <algorithm>
 
-using namespace std;
-
-const int MAX_RESULT_DOCUMENT_COUNT = 5;
-
-string ReadLine() {
-    string s;
-    getline(cin, s);
-    return s;
-}
-
-int ReadLineWithNumber() {
-    int result;
-    cin >> result;
-    ReadLine();
-    return result;
-}
-
-vector<string> SplitIntoWords(const string& text) {
-    vector<string> words;
-    string word;
-    for (const char c : text) {
-        if (c == ' ') {
-            if (!word.empty()) {
-                words.push_back(word);
-                word.clear();
-            }
+template <typename Type>
+class SingleLinkedList {
+    // Узел списка
+    struct Node {
+        Node() = default;
+        Node(const Type& val, Node* next)
+            : value(val)
+            , next_node(next) {
         }
-        else {
-            word += c;
-        }
-    }
-    if (!word.empty()) {
-        words.push_back(word);
-    }
-
-    return words;
-}
-
-struct Document {
-    Document() = default;
-
-    Document(int id, double relevance, int rating)
-        : id(id)
-        , relevance(relevance)
-        , rating(rating) {
-    }
-
-    int id = 0;
-    double relevance = 0.0;
-    int rating = 0;
-};
-
-template <typename StringContainer>
-set<string> MakeUniqueNonEmptyStrings(const StringContainer& strings) {
-    set<string> non_empty_strings;
-    for (const string& str : strings) {
-        if (!str.empty()) {
-            non_empty_strings.insert(str);
-        }
-    }
-    return non_empty_strings;
-}
-
-enum class DocumentStatus {
-    ACTUAL,
-    IRRELEVANT,
-    BANNED,
-    REMOVED,
-};
-
-class SearchServer {
-public:
-    template <typename StringContainer>
-    explicit SearchServer(const StringContainer& stop_words) {
-        if (all_of(stop_words.begin(), stop_words.end(), IsValidWord)) {
-        stop_words_ = MakeUniqueNonEmptyStrings(stop_words);
-        } else {
-        throw invalid_argument("Слово содержит специальный символ"s);
-        }
-    }
-
-    explicit SearchServer(const string& stop_words_text)
-        : SearchServer(SplitIntoWords(stop_words_text))
-    {
-    }
-
-    void AddDocument(int document_id, const string& document, DocumentStatus status, const vector<int>& ratings) {
-        if (document_id < 0) {
-            throw invalid_argument("Document_id отрицательный"s);
-        }
-        if (!CheckSameId(document_id)) {
-            throw invalid_argument("Уже существующий document's id"s);
-        }
-        if (!IsValidWord(document)) {
-            throw invalid_argument("Слово содержит специальный символ"s);
-        }
-
-        const vector<string> words = SplitIntoWordsNoStop(document);
-        document_ids_.push_back(document_id);
-
-        const double inv_word_count = 1.0 / words.size();
-        for (const string& word : words) {
-            word_to_document_freqs_[word][document_id] += inv_word_count;
-        }
-        documents_.emplace(document_id,
-            DocumentData{
-                ComputeAverageRating(ratings),
-                status
-            });
-    }
-
-    template <typename DocumentPredicate>
-    vector<Document> FindTopDocuments(const string& raw_query, DocumentPredicate document_predicate) const {            
-        const Query query = ParseQuery(raw_query);
-        auto matched_documents = FindAllDocuments(query, document_predicate);
-        sort(matched_documents.begin(), matched_documents.end(),
-             [](const Document& lhs, const Document& rhs) {
-                if (abs(lhs.relevance - rhs.relevance) < 1e-6) {
-                    return lhs.rating > rhs.rating;
-                } else {
-                    return lhs.relevance > rhs.relevance;
-                }
-             });
-        if (matched_documents.size() > MAX_RESULT_DOCUMENT_COUNT) {
-            matched_documents.resize(MAX_RESULT_DOCUMENT_COUNT);
-        }
-        return matched_documents;
-    }
-
-    vector<Document> FindTopDocuments(const string& raw_query, DocumentStatus status) const {
-        return FindTopDocuments(raw_query, [status](int document_id, DocumentStatus document, int rating) {
-            return document == status; });
-    }
-
-    vector<Document> FindTopDocuments(const string& raw_query) const {
-        return FindTopDocuments(raw_query, [](int document_id, DocumentStatus document, int rating) {
-            return document == DocumentStatus::ACTUAL; });
-
-    }
-
-    int GetDocumentCount() const {
-        return documents_.size();
-    }
-
-    int GetDocumentId(int index) const { 
-        if (index >= 0 && index < GetDocumentCount()) { 
-            return document_ids_[index]; 
-        } else { 
-            throw out_of_range("Индекс выходит за пределы диапазона"s); 
-        } 
-    }
-
-    tuple<vector<string>, DocumentStatus> MatchDocument(const string& raw_query, int document_id) const {
-        const Query query = ParseQuery(raw_query);
-        vector<string> matched_words;
-        for (const string& word : query.plus_words) {
-            if (word_to_document_freqs_.count(word) == 0) {
-                continue;
-            }
-            if (word_to_document_freqs_.at(word).count(document_id)) {
-                matched_words.push_back(word);
-            }
-        }
-        for (const string& word : query.minus_words) {
-            if (word_to_document_freqs_.count(word) == 0) {
-                continue;
-            }
-            if (word_to_document_freqs_.at(word).count(document_id)) {
-                matched_words.clear();
-                break;
-            }
-        }
-        return {matched_words, documents_.at(document_id).status};
-    }
-    
-private:
-    struct DocumentData {
-        int rating;
-        DocumentStatus status;
+        Type value;
+        Node* next_node = nullptr;
     };
-    /*const */ set<string> stop_words_;
-    map<string, map<int, double>> word_to_document_freqs_;
-    map<int, DocumentData> documents_;
-    vector<int> document_ids_;
 
-    bool IsStopWord(const string& word) const {
-        return stop_words_.count(word) > 0;
+    // Шаблон класса Базовый Итератор.
+    // Определяет поведение итератора на элементы односвязного списка
+    // ValueType - совпадает с Type (для Iterator) либо с const Type (для ConstIterator)
+    template <typename ValueType>
+    class BasicIterator {
+        // Класс списка объявляется дружественным, чтобы из методов списка
+        // был доступ к приватной области итератора
+        friend class SingleLinkedList;
+
+        // Конвертирующий конструктор итератора из указателя на узел списка
+        explicit BasicIterator(Node* node) {
+            //assert(false);
+            // Реализуйте конструктор самостоятельно
+            node_ = node;
+        }
+
+    public:
+        // Объявленные ниже типы сообщают стандартной библиотеке о свойствах этого итератора
+
+        // Категория итератора - forward iterator
+        // (итератор, который поддерживает операции инкремента и многократное разыменование)
+        using iterator_category = std::forward_iterator_tag;
+        // Тип элементов, по которым перемещается итератор
+        using value_type = Type;
+        // Тип, используемый для хранения смещения между итераторами
+        using difference_type = std::ptrdiff_t;
+        // Тип указателя на итерируемое значение
+        using pointer = ValueType*;
+        // Тип ссылки на итерируемое значение
+        using reference = ValueType&;
+
+        BasicIterator() = default;
+
+        // Конвертирующий конструктор/конструктор копирования
+        // При ValueType, совпадающем с Type, играет роль копирующего конструктора
+        // При ValueType, совпадающем с const Type, играет роль конвертирующего конструктора
+        BasicIterator(const BasicIterator<Type>& other) noexcept {
+            node_ = other.node_;
+        }
+
+        // Чтобы компилятор не выдавал предупреждение об отсутствии оператора = при наличии
+        // пользовательского конструктора копирования, явно объявим оператор = и
+        // попросим компилятор сгенерировать его за нас.
+        BasicIterator& operator=(const BasicIterator& rhs) = default;
+
+        // Оператор сравнения итераторов (в роли второго аргумента выступает константный итератор)
+        // Два итератора равны, если они ссылаются на один и тот же элемент списка, либо на end()
+        [[nodiscard]] bool operator==(const BasicIterator<const Type>& rhs) const noexcept {
+            return this->node_ == rhs.node_;
+        }
+
+        // Оператор проверки итераторов на неравенство
+        // Противоположен !=
+        [[nodiscard]] bool operator!=(const BasicIterator<const Type>& rhs) const noexcept {
+            return this->node_ != rhs.node_;
+        }
+
+        // Оператор сравнения итераторов (в роли второго аргумента итератор)
+        // Два итератора равны, если они ссылаются на один и тот же элемент списка, либо на end()
+        [[nodiscard]] bool operator==(const BasicIterator<Type>& rhs) const noexcept {
+            return this->node_ == rhs.node_;
+        }
+
+        // Оператор проверки итераторов на неравенство
+        // Противоположен !=
+        [[nodiscard]] bool operator!=(const BasicIterator<Type>& rhs) const noexcept {
+            return this->node_ != rhs.node_;
+        }
+
+        // Оператор прединкремента. После его вызова итератор указывает на следующий элемент списка
+        // Возвращает ссылку на самого себя
+        // Инкремент итератора, не указывающего на существующий элемент списка, приводит к неопределённому поведению
+        BasicIterator& operator++() noexcept {
+            //assert(false);
+            // Заглушка. Реализуйте оператор самостоятельно
+            node_ = node_->next_node;
+            return *this;
+        }
+        // Оператор постинкремента. После его вызова итератор указывает на следующий элемент списка.
+        // Возвращает прежнее значение итератора
+        // Инкремент итератора, не указывающего на существующий элемент списка,
+        // приводит к неопределённому поведению
+        BasicIterator operator++(int) noexcept {
+            //assert(false);
+            // Заглушка. Реализуйте оператор самостоятельно
+            auto old_value(*this);
+            node_ = node_->next_node;
+            return old_value;
+        }
+
+        // Операция разыменования. Возвращает ссылку на текущий элемент
+        // Вызов этого оператора у итератора, не указывающего на существующий элемент списка,
+        // приводит к неопределённому поведению
+        [[nodiscard]] reference operator*() const noexcept {
+            return node_->value;
+        }
+
+        // Операция доступа к члену класса. Возвращает указатель на текущий элемент списка.
+        // Вызов этого оператора у итератора, не указывающего на существующий элемент списка,
+        // приводит к неопределённому поведению
+        [[nodiscard]] pointer operator->() const noexcept {
+            assert(node_ != nullptr);
+            return &node_->value;
+        }
+
+    private:
+        Node* node_ = nullptr;
+    };
+
+public:
+    SingleLinkedList() {
     }
 
-    static bool IsValidWord(const string& word) {
-        // A valid word must not contain special characters
-        return none_of(word.begin(), word.end(), [](char c) {
-            return c >= '\0' && c < ' ';
-            });
+    // Возвращает количество элементов в списке за время O(1)
+    [[nodiscard]] size_t GetSize() const noexcept {
+        // Заглушка. Реализуйте метод самостоятельно
+        return size_;
     }
 
-    bool CheckSameId(const int& new_id) {
-        if (documents_.count(new_id)) {
+    // Сообщает, пустой ли список за время O(1)
+    [[nodiscard]] bool IsEmpty() const noexcept {
+        // Заглушка. Реализуйте метод самостоятельно
+        if (size_ != 0) {
             return false;
         }
         return true;
     }
 
-    vector<string> SplitIntoWordsNoStop(const string& text) const {
-        vector<string> words;
-        for (const string& word : SplitIntoWords(text)) {
-            if (!IsStopWord(word)) {
-                words.push_back(word);
-            }
-        }
-        return words;
+    // Вставляет элемент value в начало списка за время O(1)
+    void PushFront(const Type& value) {
+        // Реализуйте метод самостоятельно
+        head_.next_node = new Node(value, head_.next_node);
+        ++size_;
     }
 
-    static int ComputeAverageRating(const vector<int>& ratings) {
-        if (ratings.empty()) {
-            return 0;
+    // Очищает список за время O(N)
+    void Clear() noexcept {
+        // Реализуйте метод самостоятельно
+        while (head_.next_node != nullptr) {
+            Node* new_head = head_.next_node->next_node;
+            delete head_.next_node;
+            head_.next_node = new_head;
         }
-        int rating_sum = 0;
-        for (const int rating : ratings) {
-            rating_sum += rating;
-        }
-        return rating_sum / static_cast<int>(ratings.size());
+        size_ = 0;
     }
 
-    struct QueryWord {
-        string data;
-        bool is_minus;
-        bool is_stop;
-    };
-
-    QueryWord ParseQueryWord(string text) const {
-        QueryWord result;
-        if (text.empty()) {
-            throw invalid_argument("Отсутствие минус-слова"s);
-        }
-        bool is_minus = false;
-        if (text[0] == '-') {
-            is_minus = true;
-            text = text.substr(1);
-        }
-        if (text.empty()) {
-            throw invalid_argument("Пробел или нет текста после знака \"-\""s);
-        } else if (text[0] == '-') {
-            throw invalid_argument("Двойной знак \"-\" в минус-слове"s);
-        } else if (!IsValidWord(text)) {
-            throw invalid_argument("Слово содержит специальный символ"s);
-        }
-        
-	return { text, is_minus, IsStopWord(text) };
+    ~SingleLinkedList() {
+        Clear();
     }
 
-    struct Query {
-        set<string> plus_words;
-        set<string> minus_words;
-    };
+    using value_type = Type;
+    using reference = value_type&;
+    using const_reference = const value_type&;
 
-    Query ParseQuery(const string& text) const {
-        Query result;
-        for (const string& word : SplitIntoWords(text)) {
-            QueryWord query_word = ParseQueryWord(word);
-            if (!query_word.is_stop) {
-                if (query_word.is_minus) {
-                    result.minus_words.insert(query_word.data);
-                }
-                else {
-                    result.plus_words.insert(query_word.data);
-                }
-            }
-        }
-        return result;
+    // Итератор, допускающий изменение элементов списка
+    using Iterator = BasicIterator<Type>;
+    // Константный итератор, предоставляющий доступ для чтения к элементам списка
+    using ConstIterator = BasicIterator<const Type>;
+
+    // Возвращает итератор, ссылающийся на первый элемент
+    // Если список пустой, возвращённый итератор будет равен end()
+    [[nodiscard]] Iterator begin() noexcept {
+        //assert(false);
+        // Реализуйте самостоятельно
+        return Iterator{ head_.next_node };
     }
 
-    // Existence required
-    double ComputeWordInverseDocumentFreq(const string& word) const {
-        return log(GetDocumentCount() * 1.0 / word_to_document_freqs_.at(word).size());
+    // Возвращает итератор, указывающий на позицию, следующую за последним элементом односвязного списка
+    // Разыменовывать этот итератор нельзя - попытка разыменования приведёт к неопределённому поведению
+    [[nodiscard]] Iterator end() noexcept {
+        //assert(false);
+        // Реализуйте самостоятельно
+        return Iterator{ nullptr };
     }
 
-    template <typename DocumentPredicate>
-    vector<Document> FindAllDocuments(const Query& query, DocumentPredicate document_predicate) const {
-        map<int, double> document_to_relevance;
-        for (const string& word : query.plus_words) {
-            if (word_to_document_freqs_.count(word) == 0) {
-                continue;
-            }
-            const double inverse_document_freq = ComputeWordInverseDocumentFreq(word);
-            for (const auto [document_id, term_freq] : word_to_document_freqs_.at(word)) {
-                const auto& document_data = documents_.at(document_id);
-                if (document_predicate(document_id, document_data.status, document_data.rating)) {
-                    document_to_relevance[document_id] += term_freq * inverse_document_freq;
-                }
-            }
-        }
-
-        for (const string& word : query.minus_words) {
-            if (word_to_document_freqs_.count(word) == 0) {
-                continue;
-            }
-            for (const auto [document_id, _] : word_to_document_freqs_.at(word)) {
-                document_to_relevance.erase(document_id);
-            }
-        }
-
-        vector<Document> matched_documents;
-        for (const auto [document_id, relevance] : document_to_relevance) {
-            matched_documents.push_back({ document_id, relevance, documents_.at(document_id).rating });
-        }
-        return matched_documents;
+    // Возвращает константный итератор, ссылающийся на первый элемент
+    // Если список пустой, возвращённый итератор будет равен end()
+    // Результат вызова эквивалентен вызову метода cbegin()
+    [[nodiscard]] ConstIterator begin() const noexcept {
+        //assert(false);
+        // Реализуйте самостоятельно
+        return ConstIterator{ head_.next_node };
     }
+    // Возвращает константный итератор, указывающий на позицию, следующую за последним элементом односвязного списка
+    // Разыменовывать этот итератор нельзя - попытка разыменования приведёт к неопределённому поведению
+    // Результат вызова эквивалентен вызову метода cend()
+    [[nodiscard]] ConstIterator end() const noexcept {
+        //assert(false);
+        // Реализуйте самостоятельно
+        return ConstIterator{ nullptr };
+    }
+
+    // Возвращает константный итератор, ссылающийся на первый элемент
+    // Если список пустой, возвращённый итератор будет равен cend()
+    [[nodiscard]] ConstIterator cbegin() const noexcept {
+        //assert(false);
+        // Реализуйте самостоятельно
+        return ConstIterator{ head_.next_node };
+    }
+
+    // Возвращает константный итератор, указывающий на позицию, следующую за последним элементом односвязного списка
+    // Разыменовывать этот итератор нельзя - попытка разыменования приведёт к неопределённому поведению
+    [[nodiscard]] ConstIterator cend() const noexcept {
+        //assert(false);
+        // Реализуйте самостоятельно
+        return ConstIterator{ nullptr };
+    }
+
+    SingleLinkedList(std::initializer_list<Type> values) {
+        // Реализуйте конструктор самостоятельно
+        SingleLinkedList tmp;
+        SingleLinkedList tmp2;
+        for (auto it = values.begin(); it != values.end(); ++it) {
+            tmp.PushFront(*it);
+        }
+        for (auto it = tmp.begin(); it != tmp.end(); ++it) {
+            tmp2.PushFront(*it);
+        }
+        swap(tmp2);
+    }
+
+    SingleLinkedList(const SingleLinkedList& other) {
+        // Реализуйте конструктор самостоятельно
+        assert(size_ == 0 && head_.next_node == nullptr);
+        SingleLinkedList tmp;
+        SingleLinkedList tmp2;
+        for (auto it = other.begin(); it != other.end(); ++it) {
+            tmp.PushFront(*it);
+        }
+        for (auto it = tmp.begin(); it != tmp.end(); ++it) {
+            tmp2.PushFront(*it);
+        }
+        swap(tmp2);
+    }
+
+    SingleLinkedList& operator=(const SingleLinkedList& rhs) {
+        // Реализуйте присваивание самостоятельно
+        if (this != &rhs) {
+            SingleLinkedList tmp(rhs);
+            swap(tmp);
+        }
+        return *this;
+    }
+
+    // Обменивает содержимое списков за время O(1)
+    void swap(SingleLinkedList& other) noexcept {
+        // Реализуйте обмен содержимого списков самостоятельно
+        std::swap(other.head_.next_node, head_.next_node);
+        std::swap(other.size_, size_);
+    }
+
+    // Возвращает итератор, указывающий на позицию перед первым элементом односвязного списка.
+    // Разыменовывать этот итератор нельзя - попытка разыменования приведёт к неопределённому поведению
+    [[nodiscard]] Iterator before_begin() noexcept {
+        // Реализуйте самостоятельно
+        return Iterator{ &head_ };
+    }
+
+    // Возвращает константный итератор, указывающий на позицию перед первым элементом односвязного списка.
+    // Разыменовывать этот итератор нельзя - попытка разыменования приведёт к неопределённому поведению
+    [[nodiscard]] ConstIterator cbefore_begin() const noexcept {
+        // Реализуйте самостоятельно
+        return ConstIterator{ const_cast<Node*>(&head_) };
+    }
+
+    // Возвращает константный итератор, указывающий на позицию перед первым элементом односвязного списка.
+    // Разыменовывать этот итератор нельзя - попытка разыменования приведёт к неопределённому поведению
+    [[nodiscard]] ConstIterator before_begin() const noexcept {
+        // Реализуйте самостоятельно
+        return cbefore_begin();
+    }
+
+    /*
+     * Вставляет элемент value после элемента, на который указывает pos.
+     * Возвращает итератор на вставленный элемент
+     * Если при создании элемента будет выброшено исключение, список останется в прежнем состоянии
+     */
+    Iterator InsertAfter(ConstIterator pos, const Type& value) {
+        pos.node_->next_node = new Node(value, pos.node_->next_node);
+        ++size_;
+        return Iterator{ pos.node_->next_node };
+    }
+    void PopFront() noexcept {
+        Node* new_head = head_.next_node->next_node;
+        delete head_.next_node;
+        head_.next_node = new_head;
+    }
+
+    /*
+     * Удаляет элемент, следующий за pos.
+     * Возвращает итератор на элемент, следующий за удалённым
+     */
+    Iterator EraseAfter(ConstIterator pos) noexcept {
+        if (IsEmpty()) {
+            return end();
+        }
+        Node* temp = pos.node_->next_node->next_node;
+        delete pos.node_->next_node;
+        pos.node_->next_node = temp;
+        --size_;
+
+        return Iterator{ pos.node_->next_node };
+    }
+
+private:
+    // Фиктивный узел, используется для вставки "перед первым элементом"
+    Node head_;
+    size_t size_ = 0;
 };
 
-void PrintDocument(const Document& document) {
-    cout << "{ "s
-         << "document_id = "s << document.id << ", "s
-         << "relevance = "s << document.relevance << ", "s
-         << "rating = "s << document.rating << " }"s << endl;
+template <typename Type>
+void swap(SingleLinkedList<Type>& lhs, SingleLinkedList<Type>& rhs) noexcept {
+    // Реализуйте обмен самостоятельно
+    lhs.swap(rhs);
 }
 
-void PrintMatchDocumentResult(int document_id, const vector<string>& words, DocumentStatus status) {
-    cout << "{ "s
-         << "document_id = "s << document_id << ", "s
-         << "status = "s << static_cast<int>(status) << ", "s
-         << "words ="s;
-    for (const string& word : words) {
-        cout << ' ' << word;
-    }
-    cout << "}"s << endl;
+template <typename Type>
+bool operator==(const SingleLinkedList<Type>& lhs, const SingleLinkedList<Type>& rhs) {
+    // Заглушка. Реализуйте сравнение самостоятельно
+    std::equal(lhs.begin(), lhs.end(),
+               rhs.begin(), lhs.end());
+    return true;
 }
 
-void AddDocument(SearchServer& search_server, int document_id, const string& document, DocumentStatus status,
-    const vector<int>& ratings) {
-    try {
-        search_server.AddDocument(document_id, document, status, ratings);
+template <typename Type>
+bool operator!=(const SingleLinkedList<Type>& lhs, const SingleLinkedList<Type>& rhs) {
+    // Заглушка. Реализуйте сравнение самостоятельно
+    !std::equal(lhs.begin(), lhs.end(),
+                rhs.begin(), lhs.end());
+    return true;
+}
+
+template <typename Type>
+bool operator<(const SingleLinkedList<Type>& lhs, const SingleLinkedList<Type>& rhs) {
+    // Заглушка. Реализуйте сравнение самостоятельно
+    std::lexicographical_compare(lhs.begin(), lhs.end(), rhs.begin(), rhs.end());
+    return true;
+}
+
+template <typename Type>
+bool operator<=(const SingleLinkedList<Type>& lhs, const SingleLinkedList<Type>& rhs) {
+    // Заглушка. Реализуйте сравнение самостоятельно
+    return rhs < lhs;
+}
+
+template <typename Type>
+bool operator>(const SingleLinkedList<Type>& lhs, const SingleLinkedList<Type>& rhs) {
+    // Заглушка. Реализуйте сравнение самостоятельно
+    return  rhs < lhs;
+}
+
+template <typename Type>
+bool operator>=(const SingleLinkedList<Type>& lhs, const SingleLinkedList<Type>& rhs) {
+    // Заглушка. Реализуйте сравнение самостоятельно
+    return rhs < lhs;
+}
+
+// Эта функция тестирует работу SingleLinkedList
+void Test0() {
+    using namespace std;
+    {
+        const SingleLinkedList<int> empty_int_list;
+        assert(empty_int_list.GetSize() == 0u);
+        assert(empty_int_list.IsEmpty());
     }
-    catch (const exception& e) {
-        cout << "Ошибка добавления документа "s << document_id << ": "s << e.what() << endl;
+
+    {
+        const SingleLinkedList<string> empty_string_list;
+        assert(empty_string_list.GetSize() == 0u);
+        assert(empty_string_list.IsEmpty());
     }
 }
 
-void FindTopDocuments(const SearchServer& search_server, const string& raw_query) {
-    cout << "Результаты поиска по запросу: "s << raw_query << endl;
-    try {
-        for (const Document& document : search_server.FindTopDocuments(raw_query)) {
-            PrintDocument(document);
+void Test1() {
+    // Шпион, следящий за своим удалением
+    struct DeletionSpy {
+        DeletionSpy() = default;
+        explicit DeletionSpy(int& instance_counter) noexcept
+            : instance_counter_ptr_(&instance_counter)  //
+        {
+            OnAddInstance();
+        }
+        DeletionSpy(const DeletionSpy& other) noexcept
+            : instance_counter_ptr_(other.instance_counter_ptr_)  //
+        {
+            OnAddInstance();
+        }
+        DeletionSpy& operator=(const DeletionSpy& rhs) noexcept {
+            if (this != &rhs) {
+                auto rhs_copy(rhs);
+                std::swap(instance_counter_ptr_, rhs_copy.instance_counter_ptr_);
+            }
+            return *this;
+        }
+        ~DeletionSpy() {
+            OnDeleteInstance();
+        }
+
+    private:
+        void OnAddInstance() noexcept {
+            if (instance_counter_ptr_) {
+                ++(*instance_counter_ptr_);
+            }
+        }
+        void OnDeleteInstance() noexcept {
+            if (instance_counter_ptr_) {
+                assert(*instance_counter_ptr_ != 0);
+                --(*instance_counter_ptr_);
+            }
+        }
+
+        int* instance_counter_ptr_ = nullptr;
+    };
+
+    // Проверка вставки в начало
+    {
+        SingleLinkedList<int> l;
+        assert(l.IsEmpty());
+        assert(l.GetSize() == 0u);
+        l.PushFront(0);
+        l.PushFront(1);
+        assert(l.GetSize() == 2);
+        assert(!l.IsEmpty());
+
+        l.Clear();
+        assert(l.GetSize() == 0);
+        assert(l.IsEmpty());
+    }
+
+    // Проверка фактического удаления элементов
+    {
+        int item0_counter = 0;
+        int item1_counter = 0;
+        int item2_counter = 0;
+        {
+            SingleLinkedList<DeletionSpy> list;
+            list.PushFront(DeletionSpy{ item0_counter });
+            list.PushFront(DeletionSpy{ item1_counter });
+            list.PushFront(DeletionSpy{ item2_counter });
+
+            assert(item0_counter == 1);
+            assert(item1_counter == 1);
+            assert(item2_counter == 1);
+            list.Clear();
+            assert(item0_counter == 0);
+            assert(item1_counter == 0);
+            assert(item2_counter == 0);
+
+            list.PushFront(DeletionSpy{ item0_counter });
+            list.PushFront(DeletionSpy{ item1_counter });
+            list.PushFront(DeletionSpy{ item2_counter });
+            assert(item0_counter == 1);
+            assert(item1_counter == 1);
+            assert(item2_counter == 1);
+        }
+        assert(item0_counter == 0);
+        assert(item1_counter == 0);
+        assert(item2_counter == 0);
+    }
+
+    // Вспомогательный класс, бросающий исключение после создания N-копии
+    struct ThrowOnCopy {
+        ThrowOnCopy() = default;
+        explicit ThrowOnCopy(int& copy_counter) noexcept
+            : countdown_ptr(&copy_counter) {
+        }
+        ThrowOnCopy(const ThrowOnCopy& other)
+            : countdown_ptr(other.countdown_ptr)  //
+        {
+            if (countdown_ptr) {
+                if (*countdown_ptr == 0) {
+                    throw std::bad_alloc();
+                }
+                else {
+                    --(*countdown_ptr);
+                }
+            }
+        }
+        // Присваивание элементов этого типа не требуется
+        ThrowOnCopy& operator=(const ThrowOnCopy& rhs) = delete;
+        // Адрес счётчика обратного отсчёта. Если не равен nullptr, то уменьшается при каждом копировании.
+        // Как только обнулится, конструктор копирования выбросит исключение
+        int* countdown_ptr = nullptr;
+    };
+
+    {
+        bool exception_was_thrown = false;
+        // Последовательно уменьшаем счётчик копирований до нуля, пока не будет выброшено исключение
+        for (int max_copy_counter = 5; max_copy_counter >= 0; --max_copy_counter) {
+            // Создаём непустой список
+            SingleLinkedList<ThrowOnCopy> list;
+            list.PushFront(ThrowOnCopy{});
+            try {
+                int copy_counter = max_copy_counter;
+                list.PushFront(ThrowOnCopy(copy_counter));
+                // Если метод не выбросил исключение, список должен перейти в новое состояние
+                assert(list.GetSize() == 2);
+            }
+            catch (const std::bad_alloc&) {
+                exception_was_thrown = true;
+                // После выбрасывания исключения состояние списка должно остаться прежним
+                assert(list.GetSize() == 1);
+                break;
+            }
+        }
+        assert(exception_was_thrown);
+    }
+}
+
+// Эта функция тестирует работу SingleLinkedList
+void Test2() {
+    // Итерирование по пустому списку
+    {
+        SingleLinkedList<int> list;
+        // Константная ссылка для доступа к константным версиям begin()/end()
+        const auto& const_list = list;
+
+        // Итераторы begine и end у пустого диапазона равны друг другу
+        assert(list.begin() == list.end());
+        assert(const_list.begin() == const_list.end());
+        assert(list.cbegin() == list.cend());
+        assert(list.cbegin() == const_list.begin());
+        assert(list.cend() == const_list.end());
+    }
+
+    // Итерирование по непустому списку
+    {
+        SingleLinkedList<int> list;
+        const auto& const_list = list;
+
+        list.PushFront(1);
+        assert(list.GetSize() == 1u);
+        assert(!list.IsEmpty());
+        assert(const_list.begin() != const_list.end());
+        assert(const_list.cbegin() != const_list.cend());
+        assert(list.begin() != list.end());
+
+        assert(const_list.begin() == const_list.cbegin());
+
+        assert(*list.cbegin() == 1);
+        *list.begin() = -1;
+        assert(*list.cbegin() == -1);
+
+        const auto old_begin = list.cbegin();
+        list.PushFront(2);
+        assert(list.GetSize() == 2);
+
+        const auto new_begin = list.cbegin();
+        assert(new_begin != old_begin);
+        // Проверка прединкремента
+        {
+            auto new_begin_copy(new_begin);
+            assert((++(new_begin_copy)) == old_begin);
+        }
+        // Проверка постинкремента
+        {
+            auto new_begin_copy(new_begin);
+            assert(((new_begin_copy)++) == new_begin);
+            assert(new_begin_copy == old_begin);
+        }
+        // Итератор, указывающий на позицию после последнего элемента равен итератору end()
+        {
+            auto old_begin_copy(old_begin);
+            assert((++old_begin_copy) == list.end());
         }
     }
-    catch (const exception& e) {
-        cout << "Ошибка поиска: "s << e.what() << endl;
+    // Преобразование итераторов
+    {
+        SingleLinkedList<int> list;
+        list.PushFront(1);
+        // Конструирование ConstItrator из Iterator
+        SingleLinkedList<int>::ConstIterator const_it(list.begin());
+        assert(const_it == list.cbegin());
+        assert(*const_it == *list.cbegin());
+
+        SingleLinkedList<int>::ConstIterator const_it1;
+        // Присваивание ConstIterator-у значения Iterator
+        const_it1 = list.begin();
+        assert(const_it1 == const_it);
+    }
+    // Проверка оператора ->
+    {
+        using namespace std;
+        SingleLinkedList<std::string> string_list;
+
+        string_list.PushFront("one"s);
+        assert(string_list.cbegin()->length() == 3u);
+        string_list.begin()->push_back('!');
+        assert(*string_list.begin() == "one!"s);
     }
 }
 
-void MatchDocuments(const SearchServer& search_server, const string& query) {
-    try {
-        cout << "Матчинг документов по запросу: "s << query << endl;
-        const int document_count = search_server.GetDocumentCount();
-        for (int index = 0; index < document_count; ++index) {
-            const int document_id = search_server.GetDocumentId(index);
-            const auto [words, status] = search_server.MatchDocument(query, document_id);
-            PrintMatchDocumentResult(document_id, words, status);
+void Test3() {
+    // Проверка списков на равенство и неравенство
+    {
+        SingleLinkedList<int> list_1;
+        list_1.PushFront(1);
+        list_1.PushFront(2);
+
+        SingleLinkedList<int> list_2;
+        list_2.PushFront(1);
+        list_2.PushFront(2);
+        list_2.PushFront(3);
+
+        SingleLinkedList<int> list_1_copy;
+        list_1_copy.PushFront(1);
+        list_1_copy.PushFront(2);
+
+        SingleLinkedList<int> empty_list;
+        SingleLinkedList<int> another_empty_list;
+
+        // Список равен самому себе
+        assert(list_1 == list_1);
+        assert(empty_list == empty_list);
+
+        // Списки с одинаковым содержимым равны, а с разным - не равны
+        assert(list_1 == list_1_copy);
+        assert(list_1 != list_2);
+        assert(list_2 != list_1);
+        assert(empty_list == another_empty_list);
+    }
+
+    // Обмен содержимого списков
+    {
+        SingleLinkedList<int> first;
+        first.PushFront(1);
+        first.PushFront(2);
+
+        SingleLinkedList<int> second;
+        second.PushFront(10);
+        second.PushFront(11);
+        second.PushFront(15);
+
+        const auto old_first_begin = first.begin();
+        const auto old_second_begin = second.begin();
+        const auto old_first_size = first.GetSize();
+        const auto old_second_size = second.GetSize();
+
+        first.swap(second);
+
+        assert(second.begin() == old_first_begin);
+        assert(first.begin() == old_second_begin);
+        assert(second.GetSize() == old_first_size);
+        assert(first.GetSize() == old_second_size);
+
+        // Обмен при помощи функции swap
+        {
+            using std::swap;
+
+            // В отсутствие пользовательской перегрузки будет вызвана функция std::swap, которая
+            // выполнит обмен через создание временной копии
+            swap(first, second);
+
+            // Убеждаемся, что используется не std::swap, а пользовательская перегрузка
+            // Если бы обмен был выполнен с созданием временной копии,
+            // то итератор first.begin() не будет равен ранее сохранённому значению,
+            // так как копия будет хранить свои узлы по иным адресам
+            assert(first.begin() == old_first_begin);
+            assert(second.begin() == old_second_begin);
+            assert(first.GetSize() == old_first_size);
+            assert(second.GetSize() == old_second_size);
         }
     }
-    catch (const exception& e) {
-        cout << "Ошибка матчинга документов на запрос "s << query << ": "s << e.what() << endl;
+
+    // Инициализация списка при помощи std::initializer_list
+    {
+        SingleLinkedList<int> list{ 1, 2, 3, 4, 5 };
+        assert(list.GetSize() == 5);
+        assert(!list.IsEmpty());
+        assert(std::equal(list.begin(), list.end(), std::begin({ 1, 2, 3, 4, 5 })));
+    }
+
+    // Лексикографическое сравнение списков
+    {
+        using IntList = SingleLinkedList<int>;
+
+        assert((IntList{ 1, 2, 3 } < IntList{ 1, 2, 3, 1 }));
+        assert((IntList{ 1, 2, 3 } <= IntList{ 1, 2, 3 }));
+        assert((IntList{ 1, 2, 4 } > IntList{ 1, 2, 3 }));
+        assert((IntList{ 1, 2, 3 } >= IntList{ 1, 2, 3 }));
+    }
+
+    // Копирование списков
+    {
+        const SingleLinkedList<int> empty_list{};
+        // Копирование пустого списка
+        {
+            auto list_copy(empty_list);
+            assert(list_copy.IsEmpty());
+        }
+
+        SingleLinkedList<int> non_empty_list{ 1, 2, 3, 4 };
+        // Копирование непустого списка
+        {
+            auto list_copy(non_empty_list);
+
+            assert(non_empty_list.begin() != list_copy.begin());
+            assert(list_copy == non_empty_list);
+        }
+    }
+
+    // Присваивание списков
+    {
+        const SingleLinkedList<int> source_list{ 1, 2, 3, 4 };
+
+        SingleLinkedList<int> receiver{ 5, 4, 3, 2, 1 };
+        receiver = source_list;
+        assert(receiver.begin() != source_list.begin());
+        assert(receiver == source_list);
+    }
+
+    // Вспомогательный класс, бросающий исключение после создания N-копии
+    struct ThrowOnCopy {
+        ThrowOnCopy() = default;
+        explicit ThrowOnCopy(int& copy_counter) noexcept
+            : countdown_ptr(&copy_counter) {
+        }
+        ThrowOnCopy(const ThrowOnCopy& other)
+            : countdown_ptr(other.countdown_ptr)  //
+        {
+            if (countdown_ptr) {
+                if (*countdown_ptr == 0) {
+                    throw std::bad_alloc();
+                }
+                else {
+                    --(*countdown_ptr);
+                }
+            }
+        }
+        // Присваивание элементов этого типа не требуется
+        ThrowOnCopy& operator=(const ThrowOnCopy& rhs) = delete;
+        // Адрес счётчика обратного отсчёта. Если не равен nullptr, то уменьшается при каждом копировании.
+        // Как только обнулится, конструктор копирования выбросит исключение
+        int* countdown_ptr = nullptr;
+    };
+
+    // Безопасное присваивание списков
+    {
+        SingleLinkedList<ThrowOnCopy> src_list;
+        src_list.PushFront(ThrowOnCopy{});
+        src_list.PushFront(ThrowOnCopy{});
+        auto thrower = src_list.begin();
+        src_list.PushFront(ThrowOnCopy{});
+
+        int copy_counter = 0;  // при первом же копировании будет выброшего исключение
+        thrower->countdown_ptr = &copy_counter;
+
+        SingleLinkedList<ThrowOnCopy> dst_list;
+        dst_list.PushFront(ThrowOnCopy{});
+        int dst_counter = 10;
+        dst_list.begin()->countdown_ptr = &dst_counter;
+        dst_list.PushFront(ThrowOnCopy{});
+        try {
+            dst_list = src_list;
+            // Ожидается исключение при присваивании
+            assert(false);
+        }
+        catch (const std::bad_alloc&) {
+            // Проверяем, что состояние списка-приёмника не изменилось
+            // при выбрасывании исключений
+            assert(dst_list.GetSize() == 2);
+            auto it = dst_list.begin();
+            assert(it != dst_list.end());
+            assert(it->countdown_ptr == nullptr);
+            ++it;
+            assert(it != dst_list.end());
+            assert(it->countdown_ptr == &dst_counter);
+            assert(dst_counter == 10);
+        }
+        catch (...) {
+            // Других типов исключений не ожидается
+            assert(false);
+        }
+    }
+}
+
+void Test4() {
+    struct DeletionSpy {
+        ~DeletionSpy() {
+            if (deletion_counter_ptr) {
+                ++(*deletion_counter_ptr);
+            }
+        }
+        int* deletion_counter_ptr = nullptr;
+    };
+
+    // Проверка PopFront
+    {
+        SingleLinkedList<int> numbers{ 3, 14, 15, 92, 6 };
+        numbers.PopFront();
+        assert((numbers == SingleLinkedList<int>{14, 15, 92, 6}));
+
+        SingleLinkedList<DeletionSpy> list;
+        list.PushFront(DeletionSpy{});
+        int deletion_counter = 0;
+        list.begin()->deletion_counter_ptr = &deletion_counter;
+        assert(deletion_counter == 0);
+        list.PopFront();
+        assert(deletion_counter == 1);
+    }
+
+    // Доступ к позиции, предшествующей begin
+    {
+        SingleLinkedList<int> empty_list;
+        const auto& const_empty_list = empty_list;
+        assert(empty_list.before_begin() == empty_list.cbefore_begin());
+        assert(++empty_list.before_begin() == empty_list.begin());
+        assert(++empty_list.cbefore_begin() == const_empty_list.begin());
+
+        SingleLinkedList<int> numbers{ 1, 2, 3, 4 };
+        const auto& const_numbers = numbers;
+        assert(numbers.before_begin() == numbers.cbefore_begin());
+        assert(++numbers.before_begin() == numbers.begin());
+        assert(++numbers.cbefore_begin() == const_numbers.begin());
+    }
+
+    // Вставка элемента после указанной позиции
+    {  // Вставка в пустой список
+        {
+            SingleLinkedList<int> lst;
+            const auto inserted_item_pos = lst.InsertAfter(lst.before_begin(), 123);
+            assert((lst == SingleLinkedList<int>{123}));
+            assert(inserted_item_pos == lst.begin());
+            assert(*inserted_item_pos == 123);
+        }
+
+        // Вставка в непустой список
+        {
+            SingleLinkedList<int> lst{ 1, 2, 3 };
+            auto inserted_item_pos = lst.InsertAfter(lst.before_begin(), 123);
+
+            assert(inserted_item_pos == lst.begin());
+            assert(inserted_item_pos != lst.end());
+            assert(*inserted_item_pos == 123);
+            assert((lst == SingleLinkedList<int>{123, 1, 2, 3}));
+
+            inserted_item_pos = lst.InsertAfter(lst.begin(), 555);
+            assert(++SingleLinkedList<int>::Iterator(lst.begin()) == inserted_item_pos);
+            assert(*inserted_item_pos == 555);
+            assert((lst == SingleLinkedList<int>{123, 555, 1, 2, 3}));
+        };
+    }
+    // Вспомогательный класс, бросающий исключение после создания N-копии
+    struct ThrowOnCopy {
+        ThrowOnCopy() = default;
+        explicit ThrowOnCopy(int& copy_counter) noexcept
+            : countdown_ptr(&copy_counter) {
+        }
+        ThrowOnCopy(const ThrowOnCopy& other)
+            : countdown_ptr(other.countdown_ptr)  //
+        {
+            if (countdown_ptr) {
+                if (*countdown_ptr == 0) {
+                    throw std::bad_alloc();
+                }
+                else {
+                    --(*countdown_ptr);
+                }
+            }
+        }
+        // Присваивание элементов этого типа не требуется
+        ThrowOnCopy& operator=(const ThrowOnCopy& rhs) = delete;
+        // Адрес счётчика обратного отсчёта. Если не равен nullptr, то уменьшается при каждом копировании.
+        // Как только обнулится, конструктор копирования выбросит исключение
+        int* countdown_ptr = nullptr;
+    };
+
+    // Проверка обеспечения строгой гарантии безопасности исключений
+    {
+        bool exception_was_thrown = false;
+        for (int max_copy_counter = 10; max_copy_counter >= 0; --max_copy_counter) {
+            SingleLinkedList<ThrowOnCopy> list{ ThrowOnCopy{}, ThrowOnCopy{}, ThrowOnCopy{} };
+            try {
+                int copy_counter = max_copy_counter;
+                list.InsertAfter(list.cbegin(), ThrowOnCopy(copy_counter));
+                assert(list.GetSize() == 4u);
+            }
+            catch (const std::bad_alloc&) {
+                exception_was_thrown = true;
+                assert(list.GetSize() == 3u);
+                break;
+            }
+        }
+        assert(exception_was_thrown);
+    }
+
+    // Удаление элементов после указанной позиции
+    {
+        {
+            SingleLinkedList<int> lst{ 1, 2, 3, 4 };
+            const auto& const_lst = lst;
+            const auto item_after_erased = lst.EraseAfter(const_lst.cbefore_begin());
+            assert((lst == SingleLinkedList<int>{2, 3, 4}));
+            assert(item_after_erased == lst.begin());
+        }
+        {
+            SingleLinkedList<int> lst{ 1, 2, 3, 4 };
+            const auto item_after_erased = lst.EraseAfter(lst.cbegin());
+            assert((lst == SingleLinkedList<int>{1, 3, 4}));
+            assert(item_after_erased == (++lst.begin()));
+        }
+        {
+            SingleLinkedList<int> lst{ 1, 2, 3, 4 };
+            const auto item_after_erased = lst.EraseAfter(++(++lst.cbegin()));
+            assert((lst == SingleLinkedList<int>{1, 2, 3}));
+            assert(item_after_erased == lst.end());
+        }
+        {
+            SingleLinkedList<DeletionSpy> list{ DeletionSpy{}, DeletionSpy{}, DeletionSpy{} };
+            auto after_begin = ++list.begin();
+            int deletion_counter = 0;
+            after_begin->deletion_counter_ptr = &deletion_counter;
+            assert(deletion_counter == 0u);
+            list.EraseAfter(list.cbegin());
+            assert(deletion_counter == 1u);
+        }
     }
 }
 
 int main() {
-    setlocale(LC_CTYPE, "rus");
-    SearchServer search_server("и в на"s);
-
-    AddDocument(search_server, 1, "пушистый кот пушистый хвост"s, DocumentStatus::ACTUAL, { 7, 2, 7 });
-    AddDocument(search_server, 2, "пушистый пёс и модный ошейник"s, DocumentStatus::ACTUAL, { 1, 2 });
-    AddDocument(search_server, 5, "пушистый пёс и модный ошейник"s, DocumentStatus::ACTUAL, { 1, 2 });
-    AddDocument(search_server, 3, "большой пёс скво\x12рец евгений"s, DocumentStatus::ACTUAL, { 1, 3, 2 });
-    AddDocument(search_server, 4, "большой пёс скворец евгений"s, DocumentStatus::ACTUAL, { 1, 1, 1 });
-
-    FindTopDocuments(search_server, "пушистый пёс"s);
-    FindTopDocuments(search_server, "пушистый --кот"s);
-    FindTopDocuments(search_server, "пушистый -"s);
-
-    MatchDocuments(search_server, "пушистый пёс"s);
-    MatchDocuments(search_server, "модный -кот"s);
-    MatchDocuments(search_server, "модный --пёс"s);
-    MatchDocuments(search_server, "пушистый - хвост"s);
+    Test0();
+    Test1();
+    Test2();
+    Test3();
+    Test4();
 }
